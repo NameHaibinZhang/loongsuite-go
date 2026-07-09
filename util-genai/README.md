@@ -1,5 +1,7 @@
 # OpenTelemetry Util for GenAI (Go)
 
+[English](./README.md) | [中文](./README_CN.md)
+
 This package provides OpenTelemetry utilities for GenAI instrumentation in Go. It is a port of the Python [opentelemetry-util-genai](https://github.com/open-telemetry/opentelemetry-python-contrib/tree/main/util/opentelemetry-util-genai) package.
 
 ## Overview
@@ -120,6 +122,94 @@ func callLLM(ctx context.Context) error {
 }
 ```
 
+### Streaming Mode
+
+For streaming LLM responses, set `invocation.Stream = true` to mark the request
+as streaming (`gen_ai.request.stream`), and record the time to receive the first
+chunk in `invocation.TimeToFirstChunk` (`gen_ai.response.time_to_first_chunk`).
+Start the span *before* the network call so latency is measured accurately, drain
+the stream while accumulating the output, then call `StopLLM` once the stream is
+fully consumed.
+
+```go
+handler := utilgenai.GetTelemetryHandler()
+
+invocation := utilgenai.NewLLMInvocation("gpt-4o-mini")
+invocation.Provider = "openai"
+streaming := true
+invocation.Stream = &streaming
+invocation.InputMessages = []utilgenai.InputMessage{
+    {
+        Role:  "user",
+        Parts: []utilgenai.MessagePart{utilgenai.Text{Content: "Count from 1 to 5."}},
+    },
+}
+
+// Open the span before the network call so latency is captured accurately.
+ctx = handler.StartLLM(ctx, invocation)
+
+stream, err := client.CreateChatCompletionStream(ctx, request)
+if err != nil {
+    handler.FailLLM(invocation, &utilgenai.Error{Message: err.Error(), Type: "APIError"})
+    return err
+}
+defer stream.Close()
+
+var (
+    fullContent string
+    firstChunk  = true
+    streamStart = time.Now()
+)
+
+for {
+    resp, recvErr := stream.Recv()
+    if errors.Is(recvErr, io.EOF) {
+        break
+    }
+    if recvErr != nil {
+        handler.FailLLM(invocation, &utilgenai.Error{Message: recvErr.Error(), Type: "StreamError"})
+        return recvErr
+    }
+
+    // Record time-to-first-chunk once, on the first chunk received.
+    if firstChunk {
+        ttfc := time.Since(streamStart).Seconds()
+        invocation.TimeToFirstChunk = &ttfc
+        firstChunk = false
+    }
+
+    // The usage-only final chunk carries token counts (StreamOptions.IncludeUsage).
+    if resp.Usage != nil {
+        inTok := resp.Usage.PromptTokens
+        outTok := resp.Usage.CompletionTokens
+        invocation.InputTokens = &inTok
+        invocation.OutputTokens = &outTok
+    }
+    if len(resp.Choices) > 0 {
+        fullContent += resp.Choices[0].Delta.Content
+    }
+}
+
+// Populate the aggregated response and close the span successfully.
+invocation.OutputMessages = []utilgenai.OutputMessage{
+    {
+        Role:         "assistant",
+        Parts:        []utilgenai.MessagePart{utilgenai.Text{Content: fullContent}},
+        FinishReason: utilgenai.FinishReasonStop,
+    },
+}
+handler.StopLLM(invocation)
+```
+
+When streaming is enabled, this package emits the following additional telemetry:
+
+- Span attribute `gen_ai.request.stream`: `true`
+- Span attribute `gen_ai.response.time_to_first_chunk`: seconds until the first chunk
+- Metric `gen_ai.client.operation.time_to_first_chunk`: time-to-first-chunk histogram
+
+A complete runnable example is available under
+[`example/genai-stream`](../example/genai-stream).
+
 ### Embedding Invocation
 
 ```go
@@ -212,6 +302,13 @@ This package automatically records the following metrics:
 
 - `gen_ai.client.operation.duration`: Duration of GenAI client operations (histogram)
 - `gen_ai.client.token.usage`: Token usage for input and output (histogram)
+
+## Examples
+
+Complete runnable examples are available:
+
+- [`example/genai`](../example/genai): a comprehensive demo covering chat completion, streaming chat completion, and embedding instrumentation.
+- [`example/genai-stream`](../example/genai-stream): a streaming-focused demo highlighting streaming-specific telemetry (`gen_ai.request.stream`, `gen_ai.response.time_to_first_chunk`), exporting both spans and metrics to stdout.
 
 ## References
 
