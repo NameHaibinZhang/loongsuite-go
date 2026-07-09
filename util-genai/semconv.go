@@ -53,10 +53,10 @@ const (
 	AttrGenAIResponseTimeToFirstChunk = "gen_ai.response.time_to_first_chunk"
 
 	// GenAI usage attributes
-	AttrGenAIUsageInputTokens            = "gen_ai.usage.input_tokens"
-	AttrGenAIUsageOutputTokens           = "gen_ai.usage.output_tokens"
-	AttrGenAIUsageReasoningOutputTokens  = "gen_ai.usage.reasoning.output_tokens"
-	AttrGenAIUsageCacheReadInputTokens   = "gen_ai.usage.cache_read.input_tokens"
+	AttrGenAIUsageInputTokens              = "gen_ai.usage.input_tokens"
+	AttrGenAIUsageOutputTokens             = "gen_ai.usage.output_tokens"
+	AttrGenAIUsageReasoningOutputTokens    = "gen_ai.usage.reasoning.output_tokens"
+	AttrGenAIUsageCacheReadInputTokens     = "gen_ai.usage.cache_read.input_tokens"
 	AttrGenAIUsageCacheCreationInputTokens = "gen_ai.usage.cache_creation.input_tokens"
 
 	// GenAI conversation attributes
@@ -72,6 +72,13 @@ const (
 	AttrGenAIOutputMessages     = "gen_ai.output.messages"
 	AttrGenAISystemInstructions = "gen_ai.system_instructions"
 	AttrGenAIToolDefinitions    = "gen_ai.tool.definitions"
+
+	// GenAI message content reference attributes - set when message content is
+	// offloaded to external storage by a CompletionHook instead of being inlined.
+	AttrGenAIInputMessagesRef      = "gen_ai.input.messages_ref"
+	AttrGenAIOutputMessagesRef     = "gen_ai.output.messages_ref"
+	AttrGenAISystemInstructionsRef = "gen_ai.system_instructions_ref"
+	AttrGenAIToolDefinitionsRef    = "gen_ai.tool.definitions_ref"
 
 	// GenAI token type attribute for metrics
 	AttrGenAITokenType = "gen_ai.token.type"
@@ -130,12 +137,20 @@ const (
 type SpanKindValue string
 
 const (
-	SpanKindLLM       SpanKindValue = "llm"
-	SpanKindEmbedding SpanKindValue = "embedding"
-	SpanKindAgent     SpanKindValue = "agent"
-	SpanKindTool      SpanKindValue = "tool"
-	SpanKindRetriever SpanKindValue = "retriever"
-	SpanKindReranker  SpanKindValue = "reranker"
+	SpanKindLLM       SpanKindValue = "LLM"
+	SpanKindEmbedding SpanKindValue = "EMBEDDING"
+	SpanKindAgent     SpanKindValue = "AGENT"
+	SpanKindTool      SpanKindValue = "TOOL"
+	SpanKindRetriever SpanKindValue = "RETRIEVER"
+	SpanKindReranker  SpanKindValue = "RERANKER"
+	// Chain represents a chain/call unit that groups sub-operations.
+	SpanKindChain SpanKindValue = "CHAIN"
+	// Task represents a task invocation.
+	SpanKindTask SpanKindValue = "TASK"
+	// Entry represents an entry-point call marker.
+	SpanKindEntry SpanKindValue = "ENTRY"
+	// Step represents a ReAct round/step marker.
+	SpanKindStep SpanKindValue = "STEP"
 )
 
 // TokenType values for metrics
@@ -156,15 +171,25 @@ const (
 	OutputTypeSpeech OutputType = "speech"
 )
 
+// Event names for GenAI log-based events (experimental).
+const (
+	// EventGenAIInferenceOperationDetails is emitted for LLM invocations when
+	// event emission is enabled.
+	EventGenAIInferenceOperationDetails = "gen_ai.client.inference.operation.details"
+	// EventGenAIAgentInvokeOperationDetails is emitted for agent invocations when
+	// event emission is enabled.
+	EventGenAIAgentInvokeOperationDetails = "gen_ai.client.agent.invoke.operation.details"
+)
+
 // Metric names for GenAI
 const (
-	MetricGenAIClientOperationDuration         = "gen_ai.client.operation.duration"
-	MetricGenAIClientTokenUsage                = "gen_ai.client.token.usage"
-	MetricGenAIClientOperationTimeToFirstChunk = "gen_ai.client.operation.time_to_first_chunk"
+	MetricGenAIClientOperationDuration           = "gen_ai.client.operation.duration"
+	MetricGenAIClientTokenUsage                  = "gen_ai.client.token.usage"
+	MetricGenAIClientOperationTimeToFirstChunk   = "gen_ai.client.operation.time_to_first_chunk"
 	MetricGenAIClientOperationTimePerOutputChunk = "gen_ai.client.operation.time_per_output_chunk"
-	MetricGenAIInvokeAgentDuration             = "gen_ai.invoke_agent.duration"
-	MetricGenAIExecuteToolDuration             = "gen_ai.execute_tool.duration"
-	MetricGenAIWorkflowDuration                = "gen_ai.workflow.duration"
+	MetricGenAIInvokeAgentDuration               = "gen_ai.invoke_agent.duration"
+	MetricGenAIExecuteToolDuration               = "gen_ai.execute_tool.duration"
+	MetricGenAIWorkflowDuration                  = "gen_ai.workflow.duration"
 )
 
 // ============================================================================
@@ -254,6 +279,33 @@ func GenAIPromptName(name string) attribute.KeyValue {
 // GenAIPromptVersion creates an attribute for the prompt template version.
 func GenAIPromptVersion(version string) attribute.KeyValue {
 	return attribute.String(AttrGenAIPromptVersion, version)
+}
+
+// ============================================================================
+// Default Span Attributes (LoongSuite / Alibaba Cloud ARMS)
+//
+// These attributes are stamped on every span created by the TelemetryHandler so
+// that backends (e.g. Alibaba Cloud ARMS) can identify GenAI applications
+// instrumented by this library without requiring any extra configuration such
+// as OTEL_RESOURCE_ATTRIBUTES.
+// ============================================================================
+
+const (
+	// AttrACSARMSServiceFeature marks the service as a GenAI application for ARMS.
+	AttrACSARMSServiceFeature = "acs.arms.service.feature"
+	// ARMSServiceFeatureGenAIApp is the default value for AttrACSARMSServiceFeature.
+	ARMSServiceFeatureGenAIApp = "genai_app"
+
+	// AttrGenAIInstrumentationSDKName identifies the instrumentation SDK.
+	AttrGenAIInstrumentationSDKName = "gen_ai.instrumentation.sdk.name"
+	// InstrumentationSDKName is the default value for AttrGenAIInstrumentationSDKName.
+	InstrumentationSDKName = "loongsuite-genai-utils"
+)
+
+// defaultSpanAttributes are applied to every span created by the TelemetryHandler.
+var defaultSpanAttributes = []attribute.KeyValue{
+	attribute.String(AttrACSARMSServiceFeature, ARMSServiceFeatureGenAIApp),
+	attribute.String(AttrGenAIInstrumentationSDKName, InstrumentationSDKName),
 }
 
 // ============================================================================

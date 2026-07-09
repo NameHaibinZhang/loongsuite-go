@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -46,6 +48,8 @@ const (
 type TelemetryHandler struct {
 	tracer          trace.Tracer
 	metricsRecorder *MetricsRecorder
+	logger          log.Logger
+	completionHook  CompletionHook
 }
 
 // TelemetryHandlerOption is a function that configures a TelemetryHandler.
@@ -54,6 +58,8 @@ type TelemetryHandlerOption func(*telemetryHandlerConfig)
 type telemetryHandlerConfig struct {
 	tracerProvider trace.TracerProvider
 	meterProvider  metric.MeterProvider
+	loggerProvider log.LoggerProvider
+	completionHook CompletionHook
 }
 
 // WithTracerProvider sets the tracer provider for the TelemetryHandler.
@@ -67,6 +73,24 @@ func WithTracerProvider(tp trace.TracerProvider) TelemetryHandlerOption {
 func WithMeterProvider(mp metric.MeterProvider) TelemetryHandlerOption {
 	return func(c *telemetryHandlerConfig) {
 		c.meterProvider = mp
+	}
+}
+
+// WithLoggerProvider sets the logger provider used to emit GenAI log events.
+// When unset, the global logger provider is used.
+func WithLoggerProvider(lp log.LoggerProvider) TelemetryHandlerOption {
+	return func(c *telemetryHandlerConfig) {
+		c.loggerProvider = lp
+	}
+}
+
+// WithCompletionHook sets the CompletionHook used to offload prompt and response
+// content. When unset, an upload hook is created automatically if
+// OTEL_INSTRUMENTATION_GENAI_UPLOAD_BASE_PATH is configured; otherwise a no-op
+// hook is used.
+func WithCompletionHook(hook CompletionHook) TelemetryHandlerOption {
+	return func(c *telemetryHandlerConfig) {
+		c.completionHook = hook
 	}
 }
 
@@ -93,10 +117,36 @@ func NewTelemetryHandler(opts ...TelemetryHandlerOption) *TelemetryHandler {
 	}
 	metricsRecorder, _ = NewMetricsRecorder(meter)
 
+	var logger log.Logger
+	if cfg.loggerProvider != nil {
+		logger = cfg.loggerProvider.Logger(instrumentationName, log.WithInstrumentationVersion(instrumentationVersion))
+	} else {
+		logger = global.GetLoggerProvider().Logger(instrumentationName, log.WithInstrumentationVersion(instrumentationVersion))
+	}
+
+	completionHook := cfg.completionHook
+	if completionHook == nil {
+		if hook := NewUploadCompletionHook(); hook != nil {
+			completionHook = hook
+		} else {
+			completionHook = NewNoopCompletionHook()
+		}
+	}
+
 	return &TelemetryHandler{
 		tracer:          tracer,
 		metricsRecorder: metricsRecorder,
+		logger:          logger,
+		completionHook:  completionHook,
 	}
+}
+
+// Shutdown flushes any pending work held by the handler's completion hook.
+func (h *TelemetryHandler) Shutdown(ctx context.Context) error {
+	if h.completionHook != nil {
+		return h.completionHook.Shutdown(ctx)
+	}
+	return nil
 }
 
 // Singleton handler instance
@@ -123,7 +173,7 @@ func GetTelemetryHandler(opts ...TelemetryHandlerOption) *TelemetryHandler {
 // StartLLM starts an LLM invocation and creates a pending span entry.
 func (h *TelemetryHandler) StartLLM(ctx context.Context, invocation *LLMInvocation) context.Context {
 	spanName := GetLLMSpanName(invocation)
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -149,6 +199,9 @@ func (h *TelemetryHandler) StopLLM(invocation *LLMInvocation) {
 		h.metricsRecorder.RecordLLM(invocation.ctx, invocation, duration, "")
 	}
 
+	h.offloadLLMContent(invocation)
+	emitLLMEvent(h.logger, invocation)
+
 	invocation.span.End()
 }
 
@@ -170,7 +223,26 @@ func (h *TelemetryHandler) FailLLM(invocation *LLMInvocation, err *Error) {
 		h.metricsRecorder.RecordLLM(invocation.ctx, invocation, duration, err.Type)
 	}
 
+	h.offloadLLMContent(invocation)
+	emitLLMEvent(h.logger, invocation)
+
 	invocation.span.End()
+}
+
+// offloadLLMContent passes the invocation's prompt and response content to the
+// completion hook so it can be offloaded to external storage. It runs before the
+// span ends so the hook can stamp reference attributes.
+func (h *TelemetryHandler) offloadLLMContent(invocation *LLMInvocation) {
+	if h.completionHook == nil {
+		return
+	}
+	h.completionHook.OnCompletion(invocation.ctx, CompletionParams{
+		InputMessages:     invocation.InputMessages,
+		OutputMessages:    invocation.OutputMessages,
+		SystemInstruction: invocation.SystemInstruction,
+		ToolDefinitions:   invocation.ToolDefinitions,
+		Span:              invocation.span,
+	})
 }
 
 // ============================================================================
@@ -185,7 +257,7 @@ func (h *TelemetryHandler) FailLLM(invocation *LLMInvocation, err *Error) {
 // Per spec: span name SHOULD be `{gen_ai.operation.name} {gen_ai.request.model}`.
 func (h *TelemetryHandler) StartEmbedding(ctx context.Context, invocation *EmbeddingInvocation) context.Context {
 	spanName := fmt.Sprintf("%s %s", OperationEmbeddings, invocation.RequestModel)
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -239,7 +311,7 @@ func (h *TelemetryHandler) FailEmbedding(invocation *EmbeddingInvocation, err *E
 // Per spec: span name SHOULD be `execute_tool {gen_ai.tool.name}`.
 func (h *TelemetryHandler) StartExecuteTool(ctx context.Context, invocation *ExecuteToolInvocation) context.Context {
 	spanName := fmt.Sprintf("%s %s", OperationExecuteTool, invocation.ToolName)
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -298,7 +370,7 @@ func (h *TelemetryHandler) StartInvokeAgent(ctx context.Context, invocation *Inv
 	} else {
 		spanName = string(OperationInvokeAgent)
 	}
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -324,6 +396,8 @@ func (h *TelemetryHandler) StopInvokeAgent(invocation *InvokeAgentInvocation) {
 		h.metricsRecorder.RecordAgent(invocation.ctx, invocation, duration, "")
 	}
 
+	emitInvokeAgentEvent(h.logger, invocation)
+
 	invocation.span.End()
 }
 
@@ -345,6 +419,8 @@ func (h *TelemetryHandler) FailInvokeAgent(invocation *InvokeAgentInvocation, er
 		h.metricsRecorder.RecordAgent(invocation.ctx, invocation, duration, err.Type)
 	}
 
+	emitInvokeAgentEvent(h.logger, invocation)
+
 	invocation.span.End()
 }
 
@@ -357,7 +433,7 @@ func (h *TelemetryHandler) StartCreateAgent(ctx context.Context, invocation *Cre
 	} else {
 		spanName = string(OperationCreateAgent)
 	}
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -396,7 +472,7 @@ func (h *TelemetryHandler) StartRetrieve(ctx context.Context, invocation *Retrie
 	} else {
 		spanName = string(OperationRetrieval)
 	}
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -430,7 +506,7 @@ func (h *TelemetryHandler) FailRetrieve(invocation *RetrieveInvocation, err *Err
 // (LoongSuite Extension - reranking is not part of the official spec)
 func (h *TelemetryHandler) StartRerank(ctx context.Context, invocation *RerankInvocation) context.Context {
 	spanName := "rerank_documents"
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
