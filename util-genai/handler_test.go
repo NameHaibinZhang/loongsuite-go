@@ -19,6 +19,30 @@ import (
 	"testing"
 )
 
+// TestDefaultSpanAttributes verifies the attributes that are stamped on every
+// span so backends such as Alibaba Cloud ARMS can identify GenAI applications
+// without extra configuration (e.g. OTEL_RESOURCE_ATTRIBUTES).
+func TestDefaultSpanAttributes(t *testing.T) {
+	want := map[string]string{
+		AttrACSARMSServiceFeature:       ARMSServiceFeatureGenAIApp,
+		AttrGenAIInstrumentationSDKName: InstrumentationSDKName,
+	}
+
+	got := make(map[string]string, len(defaultSpanAttributes))
+	for _, kv := range defaultSpanAttributes {
+		got[string(kv.Key)] = kv.Value.AsString()
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("defaultSpanAttributes has %d entries, want %d", len(got), len(want))
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("default span attribute %q = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
 func TestNewTelemetryHandler(t *testing.T) {
 	handler := NewTelemetryHandler()
 	if handler == nil {

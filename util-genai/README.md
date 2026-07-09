@@ -43,6 +43,16 @@ This package provides these span attributes following the [OpenTelemetry GenAI S
 - `gen_ai.output.messages`: Output messages (when content capturing is enabled)
 - `gen_ai.system_instructions`: System instructions (when provided)
 
+### Default Attributes
+
+Every span created by the handler is stamped with the following attributes so
+that backends (e.g. Alibaba Cloud ARMS) can identify GenAI applications
+instrumented by this library without requiring any extra configuration such as
+`OTEL_RESOURCE_ATTRIBUTES`:
+
+- `acs.arms.service.feature`: `"genai_app"`
+- `gen_ai.instrumentation.sdk.name`: `"loongsuite-genai-utils"`
+
 ## Usage
 
 ### Basic LLM Invocation

@@ -282,6 +282,33 @@ func GenAIPromptVersion(version string) attribute.KeyValue {
 }
 
 // ============================================================================
+// Default Span Attributes (LoongSuite / Alibaba Cloud ARMS)
+//
+// These attributes are stamped on every span created by the TelemetryHandler so
+// that backends (e.g. Alibaba Cloud ARMS) can identify GenAI applications
+// instrumented by this library without requiring any extra configuration such
+// as OTEL_RESOURCE_ATTRIBUTES.
+// ============================================================================
+
+const (
+	// AttrACSARMSServiceFeature marks the service as a GenAI application for ARMS.
+	AttrACSARMSServiceFeature = "acs.arms.service.feature"
+	// ARMSServiceFeatureGenAIApp is the default value for AttrACSARMSServiceFeature.
+	ARMSServiceFeatureGenAIApp = "genai_app"
+
+	// AttrGenAIInstrumentationSDKName identifies the instrumentation SDK.
+	AttrGenAIInstrumentationSDKName = "gen_ai.instrumentation.sdk.name"
+	// InstrumentationSDKName is the default value for AttrGenAIInstrumentationSDKName.
+	InstrumentationSDKName = "loongsuite-genai-utils"
+)
+
+// defaultSpanAttributes are applied to every span created by the TelemetryHandler.
+var defaultSpanAttributes = []attribute.KeyValue{
+	attribute.String(AttrACSARMSServiceFeature, ARMSServiceFeatureGenAIApp),
+	attribute.String(AttrGenAIInstrumentationSDKName, InstrumentationSDKName),
+}
+
+// ============================================================================
 // LoongSuite Extension Helper Functions
 // ============================================================================
 

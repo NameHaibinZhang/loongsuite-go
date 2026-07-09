@@ -173,7 +173,7 @@ func GetTelemetryHandler(opts ...TelemetryHandlerOption) *TelemetryHandler {
 // StartLLM starts an LLM invocation and creates a pending span entry.
 func (h *TelemetryHandler) StartLLM(ctx context.Context, invocation *LLMInvocation) context.Context {
 	spanName := GetLLMSpanName(invocation)
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -257,7 +257,7 @@ func (h *TelemetryHandler) offloadLLMContent(invocation *LLMInvocation) {
 // Per spec: span name SHOULD be `{gen_ai.operation.name} {gen_ai.request.model}`.
 func (h *TelemetryHandler) StartEmbedding(ctx context.Context, invocation *EmbeddingInvocation) context.Context {
 	spanName := fmt.Sprintf("%s %s", OperationEmbeddings, invocation.RequestModel)
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -311,7 +311,7 @@ func (h *TelemetryHandler) FailEmbedding(invocation *EmbeddingInvocation, err *E
 // Per spec: span name SHOULD be `execute_tool {gen_ai.tool.name}`.
 func (h *TelemetryHandler) StartExecuteTool(ctx context.Context, invocation *ExecuteToolInvocation) context.Context {
 	spanName := fmt.Sprintf("%s %s", OperationExecuteTool, invocation.ToolName)
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -370,7 +370,7 @@ func (h *TelemetryHandler) StartInvokeAgent(ctx context.Context, invocation *Inv
 	} else {
 		spanName = string(OperationInvokeAgent)
 	}
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -433,7 +433,7 @@ func (h *TelemetryHandler) StartCreateAgent(ctx context.Context, invocation *Cre
 	} else {
 		spanName = string(OperationCreateAgent)
 	}
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -472,7 +472,7 @@ func (h *TelemetryHandler) StartRetrieve(ctx context.Context, invocation *Retrie
 	} else {
 		spanName = string(OperationRetrieval)
 	}
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx
@@ -506,7 +506,7 @@ func (h *TelemetryHandler) FailRetrieve(invocation *RetrieveInvocation, err *Err
 // (LoongSuite Extension - reranking is not part of the official spec)
 func (h *TelemetryHandler) StartRerank(ctx context.Context, invocation *RerankInvocation) context.Context {
 	spanName := "rerank_documents"
-	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal))
+	newCtx, span := h.tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindInternal), trace.WithAttributes(defaultSpanAttributes...))
 
 	invocation.span = span
 	invocation.ctx = newCtx

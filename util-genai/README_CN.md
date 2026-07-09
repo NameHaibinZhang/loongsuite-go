@@ -43,6 +43,14 @@ go get github.com/alibaba/loongsuite-go/util-genai
 - `gen_ai.output.messages`：输出消息（在启用内容采集时）
 - `gen_ai.system_instructions`：系统指令（在提供时）
 
+### 默认属性
+
+Handler 创建的每个 span 都会默认打上以下属性，使后端（如阿里云 ARMS）无需额外配置
+（例如 `OTEL_RESOURCE_ATTRIBUTES`）即可识别由本库埋点的 GenAI 应用：
+
+- `acs.arms.service.feature`：`"genai_app"`
+- `gen_ai.instrumentation.sdk.name`：`"loongsuite-genai-utils"`
+
 ## 使用方式
 
 ### 基础 LLM 调用
